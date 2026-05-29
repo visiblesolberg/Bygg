@@ -1,120 +1,123 @@
-# Finn ditt drømmehus – LillesandHus husmatcher (MVP)
+# ByggPilot AI (MVP)
 
-En mobil-først web-app der besøkende svarer på 5–6 enkle spørsmål og får sine
-**3 beste matchende hustyper** rangert med match-score og en kort begrunnelse.
-Deretter kan de sende inn kontaktinfo og bli rutet til riktig forhandler
-(lead capture). Dette er et lead-gen-verktøy – kontaktsteget er det viktigste
-konverteringspunktet.
+> **Fra rotete henvendelse til tilbuds-klart utkast — på sekunder.**
 
-> *For tradisjonen og fremtiden · Ditt hus – dine løsninger*
+Et internt verktøy for norske byggefirmaer og håndverkere. Du limer inn en rotete
+kundehenvendelse (melding + bilder + ev. PDF), og får på sekunder tilbake et
+strukturert **prosjektgrunnlag**: sammendrag, arbeidsomfang, en sjekkliste over
+**det du må avklare før tilbud**, flagg for norske byggekrav, og et **tilbuds-klart
+utkast** du selv fyller inn pris og tid på.
 
-## Tech
+ByggPilot lager **ikke** et ferdig prissatt tilbud. Det rydder kaos til et utkast og
+en sjekkliste — du beholder kontrollen over pris og tid. Analysen gjøres av
+**Claude (Anthropic)**, multimodalt (tekst + bilder + PDF).
 
-- **React (Vite)** + **Tailwind CSS**, norsk UI (bokmål), mobil-først.
-- Ingen backend i MVP. Matchingen er regelbasert og kjører helt client-side.
-- Leads logges til konsollen via én `postLead()`-funksjon, ferdig forberedt for
-  SureContact (se under).
+---
 
-## Kom i gang
+## (a) Kjøreinstruksjoner
 
 ```bash
+# 1. Installer avhengigheter
 npm install
+
+# 2. Legg inn API-nøkkel
+cp .env.example .env
+#   …og sett VITE_ANTHROPIC_API_KEY=sk-ant-... i .env
+
+# 3. Start dev-server
 npm run dev
 ```
 
 Åpne URL-en Vite skriver ut (typisk `http://localhost:5173`).
-Bygg for produksjon med `npm run build` og forhåndsvis med `npm run preview`.
+Bygg for produksjon med `npm run build`, forhåndsvis med `npm run preview`.
+
+> **Tips for demo:** Trenger du ikke skrive noe? Klikk **«Prøv et eksempel»** på
+> inntaksskjermen for å fylle inn en ferdig kjøkken-case, og last gjerne opp et
+> hvilket som helst kjøkkenbilde. Hele flyten tar under 60 sekunder.
+
+### Om API-nøkkelen
+
+MVP-en kaller Anthropic-API-et **direkte fra nettleseren** (med headeren
+`anthropic-dangerous-direct-browser-access`). Nøkkelen leses fra `.env`
+(`VITE_ANTHROPIC_API_KEY`) og ligger dermed ikke i koden — men den blir en del av
+frontend-bundelen. Det er greit for en **lokal demo**, men ikke for produksjon
+(se «Neste steg»). `.env` er git-ignorert.
+
+---
+
+## (b) Hvor man bytter modell / justerer system-prompten
+
+Alt som styrer AI-en ligger i **`src/lib/analyze.js`**:
+
+| Hva | Hvor |
+| --- | --- |
+| **Modell** | Konstanten `MODELL` øverst (standard: `claude-sonnet-4-20250514`). |
+| **Systeminstruks** (hva ByggPilot kan/ikke kan, norske krav, regler) | Konstanten `SYSTEM_PROMPT`. |
+| **Output-skjema** | Beskrevet i `SYSTEM_PROMPT`; trygt parset av `parseClaudeJson()` og fylt ut av `normaliserResultat()`. |
+
+Brønnøysund-oppslaget (orgnr → firmainfo) ligger separat i **`src/lib/brreg.js`**.
+
+---
 
 ## Prosjektstruktur
 
 ```
 src/
-  App.jsx                 # Layout: header med tagline, flyt, footer
+  App.jsx                    # Flyt: inntak -> laster -> resultat (+ feilhåndtering)
   components/
-    QuizFlow.jsx          # Styrer flyten: ett spørsmål om gangen, progress, tilbake
-    Question.jsx          # Ett spørsmål med svarknapper
-    Results.jsx           # Resultatskjerm: topp-3, lead-skjema, CTA
-    HouseCard.jsx         # Ett rangert hus-kort (bilde + fakta + match-% + begrunnelse)
-    LeadForm.jsx          # Kontaktskjema + validering + takke-tilstand
+    IntakeScreen.jsx         # Skjerm 1: tekst, opplasting, orgnr/Brreg, "Prøv et eksempel"
+    LoadingState.jsx         # Lasteanimasjon ("Leser henvendelsen…" osv.)
+    ResultView.jsx           # Skjerm 2: alle resultatkort + topp-handlinger
+    LeadTable.jsx            # Redigerbar tilbudstabell (beskrivelse/mengde/enhet/pris)
+    PdfExport.jsx            # "Eksporter som PDF" (print-basert)
+    Logo.jsx                 # ByggPilot-merke
   lib/
-    matcher.js            # HOUSES, QUESTIONS og all scoringslogikk
-    leads.js              # postLead(), routeForhandler(), buildTags()
+    analyze.js               # Claude-kallet + JSON-parsing (kjernen)
+    brreg.js                 # Brønnøysund-oppslag (din moat)
+    example.js               # Ferdig demo-case
 ```
 
-Husdataene, spørsmålene og scoringen ligger samlet i `src/lib/matcher.js`, og
-all lead-/rutinglogikk i `src/lib/leads.js`, slik at det er lett å justere.
+### Output-skjema (Claude returnerer nøyaktig dette)
 
-## Matching-algoritmen (kort)
+```json
+{
+  "prosjekttype": "nybygg | tilbygg | rehabilitering | reparasjon | befaring | ukjent",
+  "sammendrag": "2-4 setningers prosjektsammendrag på norsk",
+  "kunde": { "navn": "", "type": "privat | bedrift | ukjent", "adresse": "", "kontakt": "" },
+  "scope": ["punktvis det som er sagt/synlig"],
+  "mangler": ["info håndverkeren MÅ innhente før tilbud"],
+  "norske_flagg": [
+    { "type": "søknadsplikt | asbest | våtrom | trenger_elektriker | trenger_rørlegger | ansvarsrett | annet",
+      "tekst": "kort forklaring", "alvorlighet": "info | viktig | kritisk" }
+  ],
+  "tilbudsutkast": {
+    "tittel": "",
+    "linjer": [ { "beskrivelse": "", "mengde": "", "enhet": "", "pris": "" } ],
+    "forbehold": ["standard norske forbehold"]
+  }
+}
+```
 
-For hvert hus akkumuleres poeng (maks 110), som normaliseres til 0–100 %:
-
-| Kriterium      | Poeng |
-| -------------- | ----- |
-| Soverom        | eksakt +40, bom med 1 +20, bom med 2 +5 |
-| Bad            | eksakt +20, bom med 1 +10 |
-| Etasjer        | match +20 («Spiller ingen rolle» gir +20 til alle) |
-| Størrelsesbånd | innenfor +20, ett bånd unna +8 |
-| Husstand-nudge | +10 (par→færre sov / stor familie→flere sov) |
-
-Topp 3 hus (høyest score) vises på resultatskjermen. Justér vekter eller data
-direkte i `matcher.js`.
+Alle pris- og mengdefelt er **bevisst tomme** — håndverkeren fyller dem inn selv.
 
 ---
 
-## 🔌 Integrasjon & videreutvikling
+## (c) Neste steg (ikke bygget i MVP)
 
-### (a) Koble `postLead()` til SureContact via backend-endpoint
+Dette er en demo. For å gjøre ByggPilot til et produkt:
 
-`postLead(lead)` i `src/lib/leads.js` er den eneste inngangen for innsending. I
-MVP beriker den leadet (forhandler + tags) og `console.log`-er det, så demoen
-virker uten nøkler.
+- **Hemmelig API-nøkkel via backend.** Flytt Claude-kallet til et eget
+  backend-/serverless-endepunkt (f.eks. `/api/analyser`) slik at API-nøkkelen aldri
+  eksponeres i nettleseren. Frontend poster bare henvendelsen dit.
+- **Lagre saker.** Persistér hver analyse (database) slik at håndverkeren kan komme
+  tilbake til en sak, se historikk og oppdatere utkastet over tid.
+- **Send utkast videre.** Eksporter/overfør det ferdige utkastet til e-post eller et
+  fakturerings-/tilbudssystem som **Conta**, slik at veien fra utkast til sendt tilbud
+  blir sømløs.
+- **Flerbruker.** Innlogging, firmaprofil, roller og delte saker — slik at hele firmaet
+  jobber i samme verktøy.
+- **Rikere Brreg-moat.** Utvid firmaoppslaget (roller, regnskapstall, kredittsignaler)
+  som ekstra beslutningsstøtte.
 
-For å aktivere SureContact: opprett et **eget backend-/serverless-endpoint**
-(f.eks. `/api/lead`) som holder API-nøkkelen hemmelig – aldri send nøkkelen fra
-browseren. Avkommenter `fetch`-blokken i `postLead()`:
-
-```js
-await fetch("/api/lead", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(beriket),
-});
-```
-
-Backend gjør så mot SureContact:
-
-1. Opprett/oppdater kontakt (navn, epost, telefon, kommune)
-2. Sett tags fra `lead.tags` (ruter til riktig forhandler-segment)
-3. Legg kontakten i listen «Husmatcher-leads»
-4. Trigg ev. varsling til forhandler (e-post / SureContact-automasjon)
-
-Miljøvariabler er dokumentert i `.env.example` (`SURECONTACT_API_KEY`,
-`LEAD_ENDPOINT`). Disse hører hjemme på backend, ikke client-side.
-
-### (b) Oppdatere kommune → forhandler-mappingen
-
-Rutingen styres av `FORHANDLER_MAP` øverst i `src/lib/leads.js` – et lett
-redigerbart objekt med kommunenavn (små bokstaver) som nøkler:
-
-```js
-export const FORHANDLER_MAP = {
-  lillesand: "LillesandHus Agder",
-  oslo: "Viken-3 Bygg AS",
-  // …
-};
-```
-
-`routeForhandler(kommune)` normaliserer input og faller tilbake til
-`DEFAULT_FORHANDLER` («LillesandHus Agder») ved ukjent kommune.
-
-> ⚠️ Mappingen er et utgangspunkt – **bekreft full kommune→forhandler-mapping
-> med LillesandHus** (markert med `TODO` i koden).
-
-### (c) Oppgradere «begrunnelse»-teksten til Claude API senere
-
-Begrunnelsen genereres i dag av `buildBegrunnelse()` i `matcher.js` ved å sette
-sammen matchede kriterier til én setning. For mer naturlig språk kan dette
-byttes ut med et Claude API-kall (via et backend-endpoint, ikke direkte fra
-browseren). Send med husets data + brukerens svar, og be om en kort, varm
-begrunnelse på bokmål. Resten av appen er uendret – kun teksten i `begrunnelse`
-trenger en ny kilde.
+> **Framing:** ByggPilot selger **tidsbesparelsen** og **«hva du må huske å spørre om»** —
+> ikke magi. Håndverkeren beholder alltid kontrollen over pris og tid.
