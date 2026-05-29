@@ -1,20 +1,67 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-// HouseCard – ett rangert hus-resultat med bilde, fakta, match-% og begrunnelse.
-// Bildet hentes fra hustypens side; faller tilbake til en enkel placeholder
-// dersom bildet ikke kan lastes.
+// Henter den ekte hustype-siden sin "featured image" via WordPress REST API.
+// LillesandHus kjører WordPress, som eksponerer /wp-json med åpne CORS-headere
+// for GET. Vi slår opp siden på slug og leser ut bildet. Alt skjer i
+// besøkendes nettleser (sandbox-miljøet vårt når ikke lillesandhus.no).
+const REST_BASE = "https://lillesandhus.no/wp-json/wp/v2";
+
+// Slug = siste segment i url-en, f.eks. ".../homborsund/" → "homborsund".
+function slugFromUrl(url) {
+  return url.replace(/\/+$/, "").split("/").pop();
+}
+
+// Velg en passe stor bildevariant fra media-objektet (faller tilbake til full).
+function bestBilde(media) {
+  const sizes = media?.media_details?.sizes;
+  return (
+    sizes?.large?.source_url ||
+    sizes?.medium_large?.source_url ||
+    sizes?.medium?.source_url ||
+    media?.source_url ||
+    null
+  );
+}
+
+// HouseCard – ett rangert hus-resultat med ekte bilde, fakta, match-% og begrunnelse.
 export default function HouseCard({ hus, rank }) {
+  const [bildeUrl, setBildeUrl] = useState(null);
   const [bildeFeilet, setBildeFeilet] = useState(false);
 
-  // Heuristisk bilde-URL basert på hustypens side. Mange WordPress-oppsett
-  // eksponerer ikke et forutsigbart bilde, så vi viser en pen placeholder
-  // dersom dette feiler (onError).
-  const bildeUrl = `${hus.url}wp-content/uploads/${hus.navn.toLowerCase()}.jpg`;
+  useEffect(() => {
+    let avbrutt = false;
+    const slug = slugFromUrl(hus.url);
+
+    async function hentBilde() {
+      try {
+        const res = await fetch(
+          `${REST_BASE}/pages?slug=${encodeURIComponent(slug)}&_embed=wp:featuredmedia`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const media = data?.[0]?._embedded?.["wp:featuredmedia"]?.[0];
+        const url = bestBilde(media);
+        if (!avbrutt) {
+          if (url) setBildeUrl(url);
+          else setBildeFeilet(true);
+        }
+      } catch {
+        if (!avbrutt) setBildeFeilet(true);
+      }
+    }
+
+    hentBilde();
+    return () => {
+      avbrutt = true;
+    };
+  }, [hus.url]);
+
+  const visBilde = bildeUrl && !bildeFeilet;
 
   return (
     <article className="overflow-hidden rounded-3xl bg-white shadow-kort">
       <div className="relative h-48 w-full bg-salvie-lys sm:h-56">
-        {!bildeFeilet ? (
+        {visBilde ? (
           <img
             src={bildeUrl}
             alt={`Hustype ${hus.navn}`}
