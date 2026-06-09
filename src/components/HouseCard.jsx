@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
 
-// Henter den ekte hustype-siden sin "featured image" via WordPress REST API.
-// LillesandHus kjører WordPress, som eksponerer /wp-json med åpne CORS-headere
-// for GET. Vi slår opp siden på slug og leser ut bildet. Alt skjer i
-// besøkendes nettleser (sandbox-miljøet vårt når ikke lillesandhus.no).
+// Bildekilder, i prioritert rekkefølge:
+//  1. Lokalt bilde lagt i public/houses/<slug>.jpg (mest robust – ingen CORS).
+//  2. Hustype-sidens "featured image" via WordPress REST API (hvis CORS tillater).
+//  3. Pen placeholder med hus-ikon.
 const REST_BASE = "https://lillesandhus.no/wp-json/wp/v2";
 
 // Slug = siste segment i url-en, f.eks. ".../homborsund/" → "homborsund".
 function slugFromUrl(url) {
   return url.replace(/\/+$/, "").split("/").pop();
+}
+
+// Lokal sti til et nedlastet bilde (legg filene i public/houses/).
+function localBilde(slug) {
+  return `${import.meta.env.BASE_URL}houses/${slug}.jpg`;
 }
 
 // Velg en passe stor bildevariant fra media-objektet (faller tilbake til full).
@@ -23,16 +28,19 @@ function bestBilde(media) {
   );
 }
 
-// HouseCard – ett rangert hus-resultat med ekte bilde, fakta, match-% og begrunnelse.
+// HouseCard – ett rangert hus-resultat med bilde, fakta, match-% og begrunnelse.
 export default function HouseCard({ hus, rank }) {
-  const [bildeUrl, setBildeUrl] = useState(null);
-  const [bildeFeilet, setBildeFeilet] = useState(false);
+  const slug = slugFromUrl(hus.url);
+
+  // Liste over bildekilder vi prøver i tur og orden. Starter med lokalt bilde;
+  // WordPress-bildet legges til når/hvis REST-kallet lykkes.
+  const [kilder, setKilder] = useState([localBilde(slug)]);
+  const [idx, setIdx] = useState(0);
 
   useEffect(() => {
     let avbrutt = false;
-    const slug = slugFromUrl(hus.url);
 
-    async function hentBilde() {
+    async function hentWpBilde() {
       try {
         const res = await fetch(
           `${REST_BASE}/pages?slug=${encodeURIComponent(slug)}&_embed=wp:featuredmedia`
@@ -41,32 +49,30 @@ export default function HouseCard({ hus, rank }) {
         const data = await res.json();
         const media = data?.[0]?._embedded?.["wp:featuredmedia"]?.[0];
         const url = bestBilde(media);
-        if (!avbrutt) {
-          if (url) setBildeUrl(url);
-          else setBildeFeilet(true);
-        }
+        // Legg WordPress-bildet bakerst som reserve etter det lokale bildet.
+        if (url && !avbrutt) setKilder((k) => (k.includes(url) ? k : [...k, url]));
       } catch {
-        if (!avbrutt) setBildeFeilet(true);
+        /* ignorer – vi har lokalt bilde / placeholder som reserve */
       }
     }
 
-    hentBilde();
+    hentWpBilde();
     return () => {
       avbrutt = true;
     };
-  }, [hus.url]);
+  }, [slug]);
 
-  const visBilde = bildeUrl && !bildeFeilet;
+  const aktivKilde = idx < kilder.length ? kilder[idx] : null;
 
   return (
-    <article className="overflow-hidden rounded-3xl bg-white shadow-kort">
+    <article className="overflow-hidden rounded-3xl bg-white shadow-kort transition-shadow hover:shadow-lg">
       <div className="relative h-48 w-full bg-salvie-lys sm:h-56">
-        {visBilde ? (
+        {aktivKilde ? (
           <img
-            src={bildeUrl}
+            src={aktivKilde}
             alt={`Hustype ${hus.navn}`}
             loading="lazy"
-            onError={() => setBildeFeilet(true)}
+            onError={() => setIdx((i) => i + 1)}
             className="h-full w-full object-cover"
           />
         ) : (
