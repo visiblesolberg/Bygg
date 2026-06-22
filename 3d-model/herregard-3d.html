@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>3D-modell – plan (LillesandHus)</title>
+<style>
+  :root { --krem:#F7F4EC; --koks:#2B2B2B; --salvie:#6E7F6A; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; font-family:"Segoe UI",system-ui,sans-serif; background:var(--krem); color:var(--koks); }
+  #app { position:fixed; inset:0; }
+  .panel {
+    position:fixed; top:16px; left:16px; z-index:10;
+    background:rgba(247,244,236,.92); backdrop-filter:blur(6px);
+    border:1px solid #e3ddcf; border-radius:18px; padding:16px 18px;
+    box-shadow:0 8px 28px rgba(43,43,43,.12); max-width:280px;
+  }
+  .panel h1 { font-size:16px; margin:0 0 2px; }
+  .panel p { font-size:12px; margin:0 0 12px; color:#6b6b6b; line-height:1.4; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; }
+  button {
+    font:inherit; font-size:13px; cursor:pointer; border:1px solid #d6cfbf;
+    background:#fff; color:var(--koks); border-radius:999px; padding:8px 14px;
+    transition:all .15s;
+  }
+  button:hover { border-color:var(--salvie); }
+  button.active { background:var(--salvie); color:#fff; border-color:var(--salvie); }
+  button.primary { background:var(--salvie); color:#fff; border-color:var(--salvie); width:100%; margin-top:10px; padding:10px; font-weight:600; }
+  .hint { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:10;
+    font-size:12px; color:#7a7a7a; background:rgba(247,244,236,.85); padding:6px 14px; border-radius:999px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="panel">
+  <h1>3D-modell av planen</h1>
+  <p>Representativ modell bygget fra romoppsettet i 2D-tegningen. Dra for å rotere, scroll for zoom, høyreklikk for å panorere.</p>
+  <div class="row">
+    <button id="btnRoof" class="active">Tak</button>
+    <button id="btnUpper" class="active">2. etasje</button>
+    <button id="btnLabels" class="active">Romnavn</button>
+    <button id="btnReset">Tilbakestill</button>
+  </div>
+  <button id="btnExport" class="primary">⬇ Last ned 3D-fil (.glb)</button>
+</div>
+<div class="hint">Dra = roter · Scroll = zoom · Høyreklikk = panorer</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+
+// ---------------------------------------------------------------------------
+// Romoppsett, avledet fra 2D-planen. {n: navn, a: areal m², x,z: hjørne, w,d: bredde/dybde} i meter.
+// Koordinater er tilnærmet (proporsjonalt etter planen), ikke oppmålt nøyaktige.
+// ---------------------------------------------------------------------------
+const FLOOR1 = [
+  {n:"Garasje", a:20.3, x:1.0, z:0.5, w:4.0, d:5.0},
+  {n:"Bod", a:6.6, x:5.2, z:0.5, w:2.4, d:2.7},
+  {n:"Sluse/Bod", a:6.3, x:5.2, z:3.4, w:2.2, d:2.9},
+  {n:"Gang", a:6.9, x:2.6, z:5.7, w:2.4, d:2.9},
+  {n:"WC", a:2.1, x:7.6, z:3.4, w:1.4, d:1.5},
+  {n:"Teknisk", a:2.0, x:7.6, z:5.0, w:1.4, d:1.4},
+  {n:"Bad/WC/Vask", a:8.5, x:0.6, z:6.8, w:2.4, d:3.5},
+  {n:"Matbod", a:2.1, x:3.1, z:6.8, w:1.3, d:1.6},
+  {n:"Hall/trapp", a:11.4, x:4.6, z:6.8, w:2.8, d:4.1},
+  {n:"Ekstra soverom", a:11.3, x:7.6, z:6.8, w:3.0, d:3.8},
+  {n:"Kjøkken/allrom", a:25.6, x:0.6, z:10.5, w:4.0, d:6.4},
+  {n:"Stue", a:35.2, x:4.8, z:11.0, w:5.8, d:6.1},
+];
+const FLOOR2 = [
+  {n:"Soverom", a:18.1, x:3.5, z:1.0, w:4.0, d:4.5},
+  {n:"TV-stue", a:14.6, x:7.7, z:2.0, w:3.0, d:4.9},
+  {n:"Krypbod (kald)", a:0, x:0.6, z:3.0, w:2.7, d:5.0},
+  {n:"Bad/WC", a:11.3, x:3.5, z:6.0, w:2.5, d:4.5},
+  {n:"Gang/trapp", a:11.9, x:6.2, z:7.0, w:2.4, d:5.0},
+  {n:"Soverom", a:12.3, x:8.8, z:7.0, w:2.5, d:4.9},
+  {n:"Soverom", a:11.0, x:0.6, z:8.2, w:2.7, d:4.1},
+  {n:"Loftstue", a:13.9, x:3.5, z:10.7, w:2.8, d:5.0},
+  {n:"Soverom", a:11.6, x:8.8, z:12.1, w:2.5, d:4.6},
+];
+
+const H1 = 2.6, SLAB = 0.3, H2 = 2.5;
+const Y2 = H1 + SLAB;            // gulv 2. etasje
+const ROOF_BASE = Y2 + H2;       // takfot
+const WALL_T = 0.12;
+
+// --- Footprint (bounding box) av alle rom, for grunn, tak og kamera ---
+function bbox(rooms) {
+  let minX=1e9,minZ=1e9,maxX=-1e9,maxZ=-1e9;
+  for (const r of rooms){ minX=Math.min(minX,r.x); minZ=Math.min(minZ,r.z); maxX=Math.max(maxX,r.x+r.w); maxZ=Math.max(maxZ,r.z+r.d); }
+  return {minX,minZ,maxX,maxZ,cx:(minX+maxX)/2,cz:(minZ+maxZ)/2,w:maxX-minX,d:maxZ-minZ};
+}
+const BB = bbox([...FLOOR1, ...FLOOR2]);
+
+// ---------------------------------------------------------------------------
+// Scene
+// ---------------------------------------------------------------------------
+const app = document.getElementById("app");
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef1ea);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 1000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(BB.cx, 1.5, BB.cz);
+
+const CAM0 = new THREE.Vector3(BB.cx + Math.max(BB.w,BB.d)*1.1, 16, BB.maxZ + BB.d*0.9 + 6);
+function resetView(){ camera.position.copy(CAM0); controls.target.set(BB.cx,1.5,BB.cz); controls.update(); }
+resetView();
+
+// --- Lys ---
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9fb0a0, 0.9));
+const sun = new THREE.DirectionalLight(0xfff4e0, 1.5);
+sun.position.set(BB.cx - 14, 26, BB.minZ - 12);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048,2048);
+const s = Math.max(BB.w, BB.d) * 1.3;
+Object.assign(sun.shadow.camera, { left:-s, right:s, top:s, bottom:-s, near:1, far:80 });
+scene.add(sun);
+
+// --- Grunn (plen) ---
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(120,120),
+  new THREE.MeshStandardMaterial({ color:0xdfe6da, roughness:1 })
+);
+ground.rotation.x = -Math.PI/2;
+ground.position.set(BB.cx, 0, BB.cz);
+ground.receiveShadow = true;
+scene.add(ground);
+
+// --- Materialer ---
+const matWall  = new THREE.MeshStandardMaterial({ color:0xf3efe6, roughness:0.92 });
+const matFloor1= new THREE.MeshStandardMaterial({ color:0xc9b79c, roughness:0.85 });
+const matFloor2= new THREE.MeshStandardMaterial({ color:0xd8cab2, roughness:0.85 });
+const matRoof  = new THREE.MeshStandardMaterial({ color:0xb14b3a, roughness:0.7 });
+
+// --- Grupper (for toggling og eksport) ---
+const model = new THREE.Group();      scene.add(model);
+const gFloor1 = new THREE.Group();    model.add(gFloor1);
+const gFloor2 = new THREE.Group();    model.add(gFloor2);
+const gRoof   = new THREE.Group();    model.add(gRoof);
+const gLabels = new THREE.Group();    scene.add(gLabels); // labels ikke med i GLB
+
+// --- Tekst-etikett som sprite ---
+function makeLabel(text, sub){
+  const c = document.createElement("canvas"); c.width=256; c.height=128;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle="rgba(43,43,43,.82)";
+  roundRect(ctx,8,30,240,68,16); ctx.fill();
+  ctx.fillStyle="#fff"; ctx.textAlign="center";
+  ctx.font="600 30px Segoe UI, sans-serif"; ctx.fillText(text,128,66);
+  if(sub){ ctx.font="22px Segoe UI, sans-serif"; ctx.fillStyle="#d7ddd2"; ctx.fillText(sub,128,92); }
+  const tex = new THREE.CanvasTexture(c); tex.anisotropy=4;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, depthTest:true }));
+  sp.scale.set(2.4,1.2,1);
+  return sp;
+}
+function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+// --- Bygg ett rom: gulvflis + 4 vegger + etikett ---
+function buildRoom(r, baseY, wallH, floorMat, floorGroup){
+  const cx = r.x + r.w/2, cz = r.z + r.d/2;
+
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(r.w, 0.06, r.d), floorMat);
+  floor.position.set(cx, baseY+0.03, cz); floor.receiveShadow = true;
+  floorGroup.add(floor);
+
+  const mk = (w,h,dp,x,y,z)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,dp),matWall);
+    m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true; floorGroup.add(m); };
+  const yMid = baseY + wallH/2;
+  mk(r.w, wallH, WALL_T, cx, yMid, r.z);            // nord
+  mk(r.w, wallH, WALL_T, cx, yMid, r.z+r.d);        // sør
+  mk(WALL_T, wallH, r.d, r.x, yMid, cz);            // vest
+  mk(WALL_T, wallH, r.d, r.x+r.w, yMid, cz);        // øst
+
+  const lab = makeLabel(r.n, r.a ? r.a.toFixed(1)+" m²" : "");
+  lab.position.set(cx, baseY + wallH + 0.5, cz);
+  gLabels.add(lab);
+}
+
+FLOOR1.forEach(r => buildRoom(r, 0,  H1, matFloor1, gFloor1));
+FLOOR2.forEach(r => buildRoom(r, Y2, H2, matFloor2, gFloor2));
+
+// --- Tak: walmtak (pyramide) over hele footprinten med utstikk ---
+(function buildRoof(){
+  const over = 0.7;
+  const w = BB.w + over*2, d = BB.d + over*2;
+  const geo = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1); // enhets-pyramide, 4 sider
+  geo.rotateY(Math.PI/4);
+  const roof = new THREE.Mesh(geo, matRoof);
+  roof.scale.set(w, 2.6, d);
+  roof.position.set(BB.cx, ROOF_BASE + 1.3, BB.cz);
+  roof.castShadow = true;
+  gRoof.add(roof);
+
+  // tynt "gesims"-bånd ved takfot
+  const band = new THREE.Mesh(new THREE.BoxGeometry(w, 0.25, d),
+    new THREE.MeshStandardMaterial({ color:0xece7db, roughness:1 }));
+  band.position.set(BB.cx, ROOF_BASE+0.12, BB.cz);
+  gRoof.add(band);
+})();
+
+// ---------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------
+const toggle = (btn, grp) => btn.addEventListener("click", ()=>{
+  grp.visible = !grp.visible; btn.classList.toggle("active", grp.visible);
+});
+toggle(document.getElementById("btnRoof"), gRoof);
+toggle(document.getElementById("btnLabels"), gLabels);
+document.getElementById("btnUpper").addEventListener("click", e=>{
+  const v = !gFloor2.visible; gFloor2.visible=v; e.target.classList.toggle("active",v);
+});
+document.getElementById("btnReset").addEventListener("click", resetView);
+
+document.getElementById("btnExport").addEventListener("click", ()=>{
+  const exporter = new GLTFExporter();
+  exporter.parse(model, (glb)=>{
+    const blob = new Blob([glb], { type:"model/gltf-binary" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "hus-modell.glb"; a.click();
+    URL.revokeObjectURL(a.href);
+  }, (err)=>alert("Eksport feilet: "+err), { binary:true });
+});
+
+// ---------------------------------------------------------------------------
+addEventListener("resize", ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene,camera); })();
+</script>
+</body>
+</html>
